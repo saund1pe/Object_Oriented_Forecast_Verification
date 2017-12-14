@@ -1,0 +1,440 @@
+#!/usr/bin/env python2
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Dec  5 14:24:02 2017
+
+@author: patricksaunders
+"""
+
+import numpy as np
+import Nio
+import matplotlib.pyplot as plt
+import datetime as dt
+import cartopy
+import cartopy.crs as ccrs
+from scipy.ndimage.filters import gaussian_filter
+from skimage.measure import label, regionprops
+from skimage.transform import rotate
+
+def Threshold(grid):
+    x_len=np.shape(grid)[0]
+    y_len=np.shape(grid)[1]
+    thresh_grid = np.zeros(shape=(x_len, y_len))
+    for x in range(x_len):
+        for y in range(y_len):
+            point = grid[x][y]
+            if point is np.ma.masked:
+                thresh_grid[x][y]=-1
+            elif point > 60:
+                thresh_grid[x][y] = 60
+            elif point <= 20:
+                thresh_grid[x][y] = -1
+            else:
+                thresh_grid[x][y] = point
+    return thresh_grid
+
+def CaptureObjects(grid):
+    f20 = np.zeros((x_len, y_len))
+    f20 = np.greater(grid, 20.)
+    label_img = label(f20)
+    regions = regionprops(label_img,grid)
+    return regions
+
+def FindCentroids(regions):
+    centers = []
+    for i in range(len(regions)):
+        centers.append(list(regions[i].centroid))
+    return centers
+
+pwd = '/Users/patricksaunders/Courses/Forecast Verification/Semester Project/'
+obs_files = [pwd + 'MRMS/mrms_20170405-190000.grib2',pwd + 'MRMS/mrms_20170405-200000.grib2',
+             pwd + 'MRMS/mrms_20170405-210000.grib2',pwd + 'MRMS/mrms_20170405-220000.grib2',
+             pwd + 'MRMS/mrms_20170405-230000.grib2',pwd + 'MRMS/mrms_20170406-000000.grib2',
+             pwd + 'MRMS/mrms_20170406-010000.grib2',pwd + 'MRMS/mrms_20170406-020000.grib2',
+             pwd + 'MRMS/mrms_20170406-030000.grib2',pwd + 'MRMS/mrms_20170406-040000.grib2',
+             pwd + 'MRMS/mrms_20170406-050000.grib2',pwd + 'MRMS/mrms_20170406-060000.grib2',
+             pwd + 'MRMS/mrms_20170406-070000.grib2',pwd + 'MRMS/mrms_20170406-080000.grib2',
+             pwd + 'MRMS/mrms_20170406-090000.grib2',pwd + 'MRMS/mrms_20170406-100000.grib2',
+             pwd + 'MRMS/mrms_20170406-110000.grib2',pwd + 'MRMS/mrms_20170406-120000.grib2']
+fcst_files = [pwd + 'HRRR/hrrr.t18z.wrfsfcf01',pwd + 'HRRR/hrrr.t18z.wrfsfcf02',
+              pwd + 'HRRR/hrrr.t18z.wrfsfcf03',pwd + 'HRRR/hrrr.t18z.wrfsfcf04',
+              pwd + 'HRRR/hrrr.t18z.wrfsfcf05',pwd + 'HRRR/hrrr.t18z.wrfsfcf06',
+              pwd + 'HRRR/hrrr.t18z.wrfsfcf07',pwd + 'HRRR/hrrr.t18z.wrfsfcf08',
+              pwd + 'HRRR/hrrr.t18z.wrfsfcf09',pwd + 'HRRR/hrrr.t18z.wrfsfcf10',
+              pwd + 'HRRR/hrrr.t18z.wrfsfcf11',pwd + 'HRRR/hrrr.t18z.wrfsfcf12',
+              pwd + 'HRRR/hrrr.t18z.wrfsfcf13',pwd + 'HRRR/hrrr.t18z.wrfsfcf14',
+              pwd + 'HRRR/hrrr.t18z.wrfsfcf15',pwd + 'HRRR/hrrr.t18z.wrfsfcf16',
+              pwd + 'HRRR/hrrr.t18z.wrfsfcf17',pwd + 'HRRR/hrrr.t18z.wrfsfcf18']
+
+#one file for quick testing
+#obs_files = [pwd + 'MRMS/mrms_20170405-190000.grib2']
+#fcst_files = [pwd + 'HRRR/hrrr.t18z.wrfsfcf01']
+
+#initialize lists containg mean/std dev of errors across all fcst/obs times
+full_position_error = []
+full_std_dev_position_error = []    
+full_area_error = []
+full_std_dev_area_error = []
+full_90perc_int_error = []
+full_std_dev_90perc_int_error = []
+full_25perc_int_error = []
+full_std_dev_25perc_int_error = []
+
+#for CSI
+full_csi=[]
+
+#loop through all fcst/obs times
+for i in range(len(obs_files)):
+    #set up some variables
+    obs = Nio.open_file(obs_files[i],'r', format='grb2')
+    obs_ref = obs.variables["SeamlessHSR_P0_L102_GLC0"][:]
+    obs_lats = obs.variables["gridlat_0"][:]
+    obs_lons = obs.variables["gridlon_0"][:]
+    x_len = obs.dimensions['xgrid_0']
+    y_len = obs.dimensions['ygrid_0']
+    obs.close() 
+    
+    fcst = Nio.open_file(fcst_files[i], 'r', format='grb2')
+    fcst_ref = fcst.variables["REFD_P0_L103_GLC0"][:]
+    fcst_lats = fcst.variables["gridlat_0"][:]
+    fcst_lons = fcst.variables["gridlon_0"][:]  
+    fcst.close()
+    
+    #smooth data
+    print "\nSmoothing"
+    obs_smoothed = gaussian_filter(obs_ref, sigma = 3)
+    fcst_smoothed = gaussian_filter(fcst_ref, sigma = 3)
+    
+    #threshold data
+    print "\nThresholding"
+    obs_threshold = Threshold(obs_smoothed)
+    fcst_threshold = Threshold(fcst_smoothed)
+    
+    print "\nIdentifying regions"
+    #identify regions
+    obs_regions = CaptureObjects(obs_threshold)
+    fcst_regions = CaptureObjects(fcst_threshold)
+    
+    #Remove objects with areas < 25 gridpoints
+    obs_area=[]
+    for i in range(len(obs_regions)):
+        obs_area.append(obs_regions[i].area)
+    fcst_area=[]
+    for i in range(len(fcst_regions)):
+        fcst_area.append(fcst_regions[i].area)
+    for i in range(len(obs_regions)-1,0,-1):
+        if obs_area[i]<25:
+            del obs_regions[i]
+            del obs_area[i]
+    for i in range(len(fcst_regions)-1,0,-1):
+        if fcst_area[i]<25:
+            del fcst_regions[i]
+            del fcst_area[i]
+    
+    
+    
+    print "\nFinding centroids of objects"
+    #find centers of objects
+    obs_centers = FindCentroids(obs_regions)   
+    fcst_centers = FindCentroids(fcst_regions) 
+    
+    print "\nMatching objects"
+    matched=[]
+    IsFA=np.zeros(len(fcst_regions))
+    for i in range(len(IsFA)):
+        IsFA[i]=True
+    false_alarm=[]
+    missed=[]
+    #match objects
+    for i in range(len(obs_regions)):
+        distance=np.zeros(len(fcst_regions))
+        area=np.zeros(len(fcst_regions))
+        for j in range(len(fcst_regions)):
+            obsx = obs_centers[i][1]
+            obsy = obs_centers[i][0]
+            fcstx = fcst_centers[j][1]
+            fcsty = fcst_centers[j][0]
+            distance[j] = np.sqrt((obsx-fcstx)**2 + (obsy-fcsty)**2)
+            area[j] = (obs_regions[i].area)**0.5 + (fcst_regions[j].area)**0.5
+        min_distance = np.argmin(distance)
+        #match objects if distance between the two is less than sum of areas.
+        if distance[min_distance] < area[min_distance]:
+            matched.append([obs_regions[i],fcst_regions[min_distance]])
+        else:
+            #if object wasn't matched, it was a miss
+            missed.append(obs_regions)
+            IsFA[min_distance]=False
+    #if fcst object wasn't matched, it was a false alarm
+    for i in range(len(fcst_regions)):
+        if IsFA[i]==True:
+            false_alarm.append(fcst_regions[i])
+    
+    #calculate csi
+    csi=float(len(matched))/float((len(matched)+len(missed)+len(false_alarm)))
+    
+    #the "matched" variable is a list of matched obs/fcst objects.
+    #each index is a length-2 array with the obs region first, and the fcst region second
+    
+#    #plot histograms of area of objects
+#    plt.figure(1)
+#    fig1=plt.hist(obs_area)
+#    plt.xlabel("Area (pixels)")
+#    plt.ylabel("reflectivity (dBZ)")
+#    plt.suptitle("Distribution of Observed Regions")
+#    plt.figure(2)
+#    fig2=plt.hist(fcst_area)
+#    plt.xlabel("Area (pixels)")
+#    plt.ylabel("reflectivity (dBZ)")
+#    plt.suptitle("Distribution of Forecast Regions")
+    
+    #Calculate various errors between matched objects
+    print "\nCalculating Errors"
+    int_90percent_error=np.zeros(len(matched))
+    int_25percent_error=np.zeros(len(matched))
+    position_error=np.zeros(len(matched))
+    area_error=np.zeros(len(matched))
+    for i in range(len(matched)):
+        #distance error
+        obsx = matched[i][0].centroid[1]
+        obsy = matched[i][0].centroid[0]
+        fcstx = matched[i][1].centroid[1]
+        fcsty = matched[i][1].centroid[0]
+        position_error[i] = np.sqrt((obsx-fcstx)**2 + (obsy-fcsty)**2)
+        #area error
+        area_error[i] = matched[i][0].area-matched[i][1].area
+        #intensity error
+        obs_int = matched[i][0].intensity_image
+        fcst_int = matched[i][1].intensity_image
+        obs_int_1d = obs_int.flatten()
+        fcst_int_1d = fcst_int.flatten()
+        obs_int_sort = np.sort(obs_int_1d)
+        fcst_int_sort = np.sort(fcst_int_1d)
+        int_90percent_error[i] = np.percentile(obs_int_sort, 90) - np.percentile(fcst_int_sort, 90)
+        int_25percent_error[i] = np.percentile(obs_int_sort, 25) - np.percentile(fcst_int_sort, 25)
+        
+    #calculate mean and stand deviation for various error calculations
+    #append errors to list for each forecast hour
+    mean_position_error = np.mean(position_error)
+    std_dev_position_error = np.std(position_error)
+    full_position_error.append(mean_position_error)
+    full_std_dev_position_error.append(std_dev_position_error)
+    
+    mean_area_error = np.mean(area_error)
+    std_dev_area_error = np.std(area_error)
+    full_area_error.append(mean_area_error)
+    full_std_dev_area_error.append(std_dev_area_error)
+    
+    mean_90perc_int_error = np.mean(int_90percent_error)
+    std_dev_90perc_int_error = np.std(int_90percent_error)
+    full_90perc_int_error.append(mean_90perc_int_error)
+    full_std_dev_90perc_int_error.append(std_dev_90perc_int_error)
+    
+    mean_25perc_int_error = np.mean(int_25percent_error)
+    std_dev_25perc_int_error = np.std(int_25percent_error)
+    full_25perc_int_error.append(mean_25perc_int_error)
+    full_std_dev_25perc_int_error.append(std_dev_25perc_int_error)
+
+#    #plot original radar observations
+#    fig1 = plt.figure()
+#    fig1.set_size_inches(12,8)
+#    ax1=plt.axes([0.,0.,1.,1.],projection=ccrs.PlateCarree())
+#    ax1.set_extent([-125.0,-66.5,22.5,52.5])
+#    intervals = [0,5,10,15,20,25,30,35,40,45,50,55,60,65]
+#    obsobj=plt.contourf(obs_lons,obs_lats,obs_ref,intervals,cmap='jet',transform=ccrs.PlateCarree())
+#    states_provinces = cartopy.feature.NaturalEarthFeature(
+#            category='cultural',
+#            name='admin_1_states_provinces_lines',
+#            scale='50m',
+#            facecolor='none')
+#    ax1.add_feature(cartopy.feature.BORDERS)
+#    ax1.add_feature(cartopy.feature.COASTLINE)
+#    ax1.add_feature(states_provinces,edgecolor='gray')
+#    colbar = plt.colorbar(obsobj,orientation='horizontal',ticks=intervals)
+#    colbar.set_label('dBZ',rotation='horizontal',fontsize='medium')
+#    titlestr = 'MRMS radar valid 20170405 1900 UTC '
+#    plt.title(titlestr, fontsize='large')
+#    
+#    #plot original forecast radar
+#    fig2 = plt.figure()
+#    fig2.set_size_inches(12,8)
+#    ax2=plt.axes([0.,0.,1.,1.],projection=ccrs.PlateCarree())
+#    ax2.set_extent([-125.0,-66.5,22.5,52.5])
+#    intervals = [0,5,10,15,20,25,30,35,40,45,50,55,60,65]
+#    obsobj=plt.contourf(obs_lons,obs_lats,fcst_ref,intervals,cmap='jet',transform=ccrs.PlateCarree())
+#    states_provinces = cartopy.feature.NaturalEarthFeature(
+#            category='cultural',
+#            name='admin_1_states_provinces_lines',
+#            scale='50m',
+#            facecolor='none')
+#    ax2.add_feature(cartopy.feature.BORDERS)
+#    ax2.add_feature(cartopy.feature.COASTLINE)
+#    ax2.add_feature(states_provinces,edgecolor='gray')
+#    colbar = plt.colorbar(obsobj,orientation='horizontal',ticks=intervals)
+#    colbar.set_label('dBZ',rotation='horizontal',fontsize='medium')
+#    titlestr = '18Z HRRR radar valid 20170405 1900 UTC '
+#    plt.title(titlestr, fontsize='large')
+#    
+#    #plot smoothed radar obs
+#    fig3 = plt.figure()
+#    fig3.set_size_inches(12,8)
+#    ax3=plt.axes([0.,0.,1.,1.],projection=ccrs.PlateCarree())
+#    ax3.set_extent([-125.0,-66.5,22.5,52.5])
+#    intervals = [0,5,10,15,20,25,30,35,40,45,50,55,60,65]
+#    obsobj=plt.contourf(obs_lons,obs_lats,obs_smoothed,intervals,cmap='jet',transform=ccrs.PlateCarree())
+#    states_provinces = cartopy.feature.NaturalEarthFeature(
+#            category='cultural',
+#            name='admin_1_states_provinces_lines',
+#            scale='50m',
+#            facecolor='none')
+#    ax3.add_feature(cartopy.feature.BORDERS)
+#    ax3.add_feature(cartopy.feature.COASTLINE)
+#    ax3.add_feature(states_provinces,edgecolor='gray')
+#    colbar = plt.colorbar(obsobj,orientation='horizontal',ticks=intervals)
+#    colbar.set_label('dBZ',rotation='horizontal',fontsize='medium')
+#    titlestr = 'Smoothed MRMS radar valid 20170405 1900 UTC '
+#    plt.title(titlestr, fontsize='large') 
+#
+#    #plot smoothed forecast radar
+#    fig4 = plt.figure()
+#    fig4.set_size_inches(12,8)
+#    ax4=plt.axes([0.,0.,1.,1.],projection=ccrs.PlateCarree())
+#    ax4.set_extent([-125.0,-66.5,22.5,52.5])
+#    intervals = [0,5,10,15,20,25,30,35,40,45,50,55,60,65]
+#    obsobj=plt.contourf(obs_lons,obs_lats,fcst_smoothed,intervals,cmap='jet',transform=ccrs.PlateCarree())
+#    states_provinces = cartopy.feature.NaturalEarthFeature(
+#            category='cultural',
+#            name='admin_1_states_provinces_lines',
+#            scale='50m',
+#            facecolor='none')
+#    ax4.add_feature(cartopy.feature.BORDERS)
+#    ax4.add_feature(cartopy.feature.COASTLINE)
+#    ax4.add_feature(states_provinces,edgecolor='gray')
+#    colbar = plt.colorbar(obsobj,orientation='horizontal',ticks=intervals)
+#    colbar.set_label('dBZ',rotation='horizontal',fontsize='medium')
+#    titlestr = 'Smoothed 18Z HRRR radar valid 20170405 1900 UTC '
+#    plt.title(titlestr, fontsize='large')
+#
+#    #plot obs thresholded grid
+#    fig5 = plt.figure()
+#    fig5.set_size_inches(12,8)
+#    ax5=plt.axes([0.,0.,1.,1.],projection=ccrs.PlateCarree())
+#    ax5.set_extent([-125.0,-66.5,22.5,52.5])
+#    intervals = [0,5,10,15,20,25,30,35,40,45,50,55,60,65]
+#    obsobj=plt.contourf(obs_lons,obs_lats,obs_threshold,intervals,cmap='jet',transform=ccrs.PlateCarree())
+#    states_provinces = cartopy.feature.NaturalEarthFeature(
+#            category='cultural',
+#            name='admin_1_states_provinces_lines',
+#            scale='50m',
+#            facecolor='none')
+#    ax5.add_feature(cartopy.feature.BORDERS)
+#    ax5.add_feature(cartopy.feature.COASTLINE)
+#    ax5.add_feature(states_provinces,edgecolor='gray')
+#    colbar = plt.colorbar(obsobj,orientation='horizontal',ticks=intervals)
+#    colbar.set_label('dBZ',rotation='horizontal',fontsize='medium')
+#    titlestr = 'Thresholded MRMS radar valid 20170405 1900 UTC '
+#    plt.title(titlestr, fontsize='large')
+#    
+#    #plot fcst thresholded grid
+#    fig6 = plt.figure()
+#    fig6.set_size_inches(12,8)
+#    ax6=plt.axes([0.,0.,1.,1.],projection=ccrs.PlateCarree())
+#    ax6.set_extent([-125.0,-66.5,22.5,52.5])
+#    intervals = [0,5,10,15,20,25,30,35,40,45,50,55,60,65]
+#    obsobj=plt.contourf(obs_lons,obs_lats,fcst_threshold,intervals,cmap='jet',transform=ccrs.PlateCarree())
+#    states_provinces = cartopy.feature.NaturalEarthFeature(
+#            category='cultural',
+#            name='admin_1_states_provinces_lines',
+#            scale='50m',
+#            facecolor='none')
+#    ax6.add_feature(cartopy.feature.BORDERS)
+#    ax6.add_feature(cartopy.feature.COASTLINE)
+#    ax6.add_feature(states_provinces,edgecolor='gray')
+#    colbar = plt.colorbar(obsobj,orientation='horizontal',ticks=intervals)
+#    colbar.set_label('dBZ',rotation='horizontal',fontsize='medium')
+#    titlestr = 'Thresholded 18Z HRRR radar valid 20170405 1900 UTC '
+#    plt.title(titlestr, fontsize='large')
+
+x=[2,4,6,8,10,12,14,16,18]
+labels=["F02","F04","F06","F08","F10","F12","F14","F16","F18"]
+
+#plot
+fig, ax = plt.subplots(figsize=(12,7))
+ax.plot(full_csi)
+plt.xlabel("Forecast hour",fontsize=18)
+plt.ylabel("CSI",fontsize=18)
+plt.suptitle("Critical Success Index",fontsize=26)
+plt.axhline(np.mean(full_csi), color="orange")
+plt.xticks(x, labels, fontsize=14)
+plt.yticks(fontsize=14)
+
+fig, ax = plt.subplots(figsize=(12,7))
+ax.plot(full_position_error)
+plt.xlabel("Forecast hour",fontsize=18)
+plt.ylabel("Position Error",fontsize=18)
+plt.suptitle("Position Error Between Matched Regions",fontsize=26)
+plt.axhline(np.mean(full_position_error), color="orange")
+plt.xticks(x, labels, fontsize=14)
+plt.yticks(fontsize=14)
+
+fig, ax = plt.subplots(figsize=(12,7))
+ax.plot(full_std_dev_position_error)
+plt.xlabel("Forecast hour",fontsize=18)
+plt.ylabel("Standard Deviation",fontsize=18)
+plt.suptitle("Standard Deviation of Position Error",fontsize=26)
+plt.axhline(np.mean(full_std_dev_position_error), color="orange")
+plt.xticks(x, labels, fontsize=14)
+plt.yticks(fontsize=14)
+
+fig, ax = plt.subplots(figsize=(12,7))
+ax.plot(full_area_error)
+plt.xlabel("Forecast hour",fontsize=18)
+plt.ylabel("Area Error",fontsize=18)
+plt.suptitle("Area Error Between Matched Regions",fontsize=26)
+plt.axhline(np.mean(full_area_error), color="orange")
+plt.xticks(x, labels, fontsize=14)
+plt.yticks(fontsize=14)
+
+fig, ax = plt.subplots(figsize=(12,7))
+ax.plot(full_std_dev_area_error)
+plt.xlabel("Forecast hour",fontsize=18)
+plt.ylabel("Standard Deviation",fontsize=18)
+plt.suptitle("Standard Deviation of Area Error",fontsize=26)
+plt.axhline(np.mean(full_std_dev_area_error), color="orange")
+plt.xticks(x, labels, fontsize=14)
+plt.yticks(fontsize=14)
+
+fig, ax = plt.subplots(figsize=(12,7))
+ax.plot(full_90perc_int_error)
+plt.xlabel("Forecast hour",fontsize=18)
+plt.ylabel("Intensity Error",fontsize=18)
+plt.suptitle("Error of 90th percential of Intensity",fontsize=26)
+plt.axhline(np.mean(full_90perc_int_error), color="orange")
+plt.xticks(x, labels, fontsize=14)
+plt.yticks(fontsize=14)
+
+fig, ax = plt.subplots(figsize=(12,7))
+ax.plot(full_std_dev_90perc_int_error)
+plt.xlabel("Forecast hour",fontsize=18)
+plt.ylabel("Standard Deviation",fontsize=18)
+plt.suptitle("Standard Deviation of Error of 90th percential of Intensity",fontsize=26)
+plt.axhline(np.mean(full_std_dev_90perc_int_error), color="orange")
+plt.xticks(x, labels, fontsize=14)
+plt.yticks(fontsize=14)
+
+fig, ax = plt.subplots(figsize=(12,7))
+ax.plot(full_25perc_int_error)
+plt.xlabel("Forecast hour",fontsize=18)
+plt.ylabel("Intensity Error",fontsize=18)
+plt.suptitle("Error of 25th percential of Intensity",fontsize=26)
+plt.axhline(np.mean(full_25perc_int_error), color="orange")
+plt.xticks(x, labels, fontsize=14)
+plt.yticks(fontsize=14)
+
+fig, ax = plt.subplots(figsize=(12,7))
+ax.plot(full_std_dev_25perc_int_error)
+plt.xlabel("Forecast hour",fontsize=18)
+plt.ylabel("Standard Deviation",fontsize=18)
+plt.suptitle("Standard Deviation of Error of 25th percential of Intensity",fontsize=26)
+plt.axhline(np.mean(full_std_dev_25perc_int_error), color="orange")
+plt.xticks(x, labels, fontsize=14)
+plt.yticks(fontsize=14)
